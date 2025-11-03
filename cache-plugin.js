@@ -43,13 +43,11 @@ module.exports = {
         const html = fs.readFileSync(filePath, 'utf8');
         console.log(`[CACHE HIT] ${url}`);
 
-        // prerender가 인식하도록 설정
+        // prerender 형식으로 응답
         req.prerender.content = html;
         req.prerender.statusCode = 200;
-        req.prerender.responseSent = true;
 
-        res.send(html);
-        return; // 캐시 반환, next() 호출 안함
+        return res.send(200, html); // statusCode, content 순서
       }
     }
 
