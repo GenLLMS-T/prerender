@@ -3,7 +3,7 @@ var prerender = require('./lib');
 var cachePlugin = require('./cache-plugin');
 
 var server = prerender({
-  chromeLocation: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  chromeLocation: '/usr/bin/google-chrome',
   followRedirects: true,
 });
 
