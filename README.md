@@ -1,0 +1,175 @@
+# Prerender Service
+
+Playwright 기반의 경량화된 프리렌더링 서비스입니다. JavaScript로 렌더링된 페이지를 캐싱하여 SEO와 성능을 개선합니다.
+
+## 주요 특징
+
+- **Playwright 기반**: Chromium을 사용한 안정적인 렌더링
+- **비동기 워커 풀**: 10개의 워커가 동시에 렌더링 처리
+- **S3 캐싱**: AWS S3에 렌더링 결과를 영구 저장
+- **큐 시스템**: 캐시 미스 시 자동으로 렌더링 큐에 추가
+- **에러 로깅**: 실패한 URL과 콘솔 로그를 파일에 기록
+
+## 기존 prerender.io와의 차이점
+
+| 항목 | prerender.io (Node.js) | 현재 (Playwright) |
+|------|----------------------|------------------|
+| 브라우저 | Chrome CDP | Playwright Chromium |
+| 캐시 | 로컬 파일 | AWS S3 |
+| 언어 | Node.js | Python (FastAPI) |
+| 워커 | 탭별 처리 | 워커 풀 10개 |
+| 플러그인 | 다양한 플러그인 | 미니멀 (필요 시 추가) |
+
+## 프로젝트 구조
+
+```
+.
+├── main.py           # FastAPI 앱 및 /render 엔드포인트
+├── worker.py         # Playwright 렌더링 워커
+├── config.py         # 환경변수 설정 중앙 관리
+├── requirements.txt  # Python 의존성
+├── Dockerfile        # Docker 이미지 빌드
+├── docker-compose.yml
+└── .env             # 환경변수 설정
+```
+
+## 환경 설정
+
+`.env` 파일을 생성하고 다음 내용을 설정하세요:
+
+```env
+# Runtime mode
+MODE=production
+
+# S3 Configuration
+SITEMAPLLMS_S3_REGION=ap-northeast-2
+SITEMAPLLMS_S3_BUCKET=your-bucket-name
+SITEMAPLLMS_S3_PREFIX=prerender
+SITEMAPLLMS_S3_ACCESS_KEY=your-access-key
+SITEMAPLLMS_S3_SECRET_KEY=your-secret-key
+SITEMAPLLMS_S3_USE_SSL=true
+
+# Prerender Configuration
+NUM_WORKERS=10
+PAGE_LOAD_TIMEOUT=10000
+META_LOADER_TIMEOUT=2000
+PRERENDER_PORT=3081
+```
+
+## 로컬 실행
+
+### 1. 의존성 설치
+
+```bash
+pip install -r requirements.txt
+playwright install --with-deps chromium
+```
+
+### 2. 서버 실행
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 3081
+```
+
+## Docker 실행
+
+```bash
+docker-compose up --build
+```
+
+## API 사용법
+
+### 렌더링 요청
+
+```bash
+GET http://localhost:3081/render?url=https://example.com
+```
+
+**응답 케이스:**
+
+1. **캐시 히트** (S3에 있는 경우)
+   ```
+   Status: 200
+   Content-Type: text/html
+
+   <html>...</html>
+   ```
+
+2. **캐시 미스** (렌더링 큐에 추가)
+   ```json
+   {
+     "status": "queued",
+     "url": "https://example.com"
+   }
+   ```
+
+### 동작 흐리
+
+1. 클라이언트가 `/render?url=...` 요청
+2. S3에서 캐시 확인 (MD5 해시 기반)
+3. **캐시 있음**: HTML 즉시 반환
+4. **캐시 없음**:
+   - `{"status": "queued"}` 반환
+   - URL을 워커 큐에 추가
+   - 워커가 Playwright로 렌더링 후 S3에 저장
+   - 다음 요청 시 캐시에서 반환
+
+## 렌더링 완료 조건
+
+페이지가 다음 메타 태그를 생성할 때까지 대기합니다:
+
+```html
+<meta data-gen-source="meta-loader">
+```
+
+이 태그가 나타나면 렌더링 완료로 간주합니다. 타임아웃은 `META_LOADER_TIMEOUT` 환경변수로 설정 가능합니다.
+
+## 에러 처리
+
+렌더링 실패 시 다음 파일에 로그가 기록됩니다:
+
+- `failed_urls.txt`: 실패한 URL 목록
+- `errors.log`: 상세 에러 메시지 및 콘솔 로그
+
+## FastAPI 메인 프로젝트와 통합
+
+현재는 독립 컨테이너로 실행되지만, 필요 시 FastAPI 메인 프로젝트에 통합 가능합니다:
+
+```yaml
+# docker-compose.yml에 추가
+services:
+  prerender:
+    build: ./prerender
+    expose:
+      - "3081"
+    env_file:
+      - ./prerender/.env
+```
+
+메인 FastAPI에서 호출:
+
+```python
+import httpx
+
+async def get_prerendered_page(url: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "http://prerender:3081/render",
+            params={"url": url}
+        )
+        return response.text
+```
+
+## 설정 튜닝
+
+- `NUM_WORKERS`: 동시 렌더링 워커 수 (기본: 10)
+- `PAGE_LOAD_TIMEOUT`: 페이지 로드 타임아웃 (기본: 10000ms)
+- `META_LOADER_TIMEOUT`: 메타태그 대기 타임아웃 (기본: 2000ms)
+
+## 주의사항
+
+- S3 버킷은 미리 생성되어 있어야 합니다
+
+## 라이선스
+
+Apache License 2.0
