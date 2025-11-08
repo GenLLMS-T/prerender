@@ -1,0 +1,12 @@
+name: prerender
+
+services:
+  api:
+    build: .
+    image: prerender-fastapi:latest
+    container_name: prerender
+    ports:
+      - "3081:3081"
+    env_file:
+      - .env
+    restart: unless-stopped
