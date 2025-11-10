@@ -20,7 +20,19 @@ async def render_url_service(
     redis_result_key = f"render:result:{url_hash}"
     s3_key = f"{config.S3_PREFIX}/{url_hash}.html"
 
-    # Step 1: Check Redis cache (complete renders only, TTL: 1 hour)
+    # Step 1: Check Redis failure cache (prevent retry storms)
+    try:
+        failure_key = f"render:failure:{url_hash}"
+        is_failed = await redis_client.get(failure_key)
+        if is_failed:
+            print(f"[FAILURE CACHED] {url} - skipping render (failed recently)")
+            raise HTTPException(500, "Rendering failed recently (cached)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Redis failure check error: {e}")
+
+    # Step 2: Check Redis cache (complete renders only, TTL: 1 hour)
     try:
         cached_html = await redis_client.get(redis_cache_key)
         if cached_html:
@@ -29,7 +41,7 @@ async def render_url_service(
     except Exception as e:
         print(f"Redis cache check error: {e}")
 
-    # Step 2: Check S3 cache
+    # Step 3: Check S3 cache
     try:
         await cache_s3_client.head_object(Bucket=config.S3_BUCKET, Key=s3_key)
         obj = await cache_s3_client.get_object(Bucket=config.S3_BUCKET, Key=s3_key)
@@ -50,7 +62,7 @@ async def render_url_service(
     except Exception as e:
         print(f"S3 cache check error: {e}")
 
-    # Step 3: Render (with duplicate request handling)
+    # Step 4: Render (with duplicate request handling)
     # Check if another request is already rendering this URL
     try:
         # Try to acquire lock (set with NX flag, TTL: 60 seconds)
