@@ -11,18 +11,40 @@ import config
 os.makedirs("logs", exist_ok=True)
 
 
-async def log_error(url: str, message: str, console_logs=None):
-    t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Log failed URL
-    with open("logs/failed_urls.txt", "a", encoding="utf-8") as f:
-        f.write(url + "\n")
-    # Log detailed error with console output
-    with open("logs/errors.log", "a", encoding="utf-8") as f:
-        f.write(f"[{t}] {url} - {message}\n")
+async def log_render(url: str, status: str, message: str = "", console_logs=None):
+    now = datetime.now()
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    date_str = now.strftime("%Y-%m-%d")
+
+    # Console output
+    print(f"[{timestamp}] [{status.upper()}] {url}")
+    if message:
+        print(f"  → {message}")
+
+    # Log to daily file
+    log_file = f"logs/render-{date_str}.log"
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] [{status.upper()}] {url}\n")
+        if message:
+            f.write(f"  → {message}\n")
         if console_logs:
             for line in console_logs[-5:]:
                 f.write(f"    {line}\n")
-            f.write("\n")
+        f.write("\n")
+
+    # Track failed URLs (with deduplication)
+    if status == "failed":
+        # Read existing URLs
+        failed_set = set()
+        failed_file = "logs/failed_urls.txt"
+        if os.path.exists(failed_file):
+            with open(failed_file, "r", encoding="utf-8") as f:
+                failed_set = set(line.strip() for line in f if line.strip())
+
+        # Add new URL if not exists
+        if url not in failed_set:
+            with open(failed_file, "a", encoding="utf-8") as f:
+                f.write(url + "\n")
 
 
 async def render_page(url: str, browser_context: BrowserContext, s3_client) -> str:
@@ -47,7 +69,7 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client) -> s
             is_complete = True
         except PlaywrightTimeoutError:
             # Meta tag not found - partial render, but continue
-            await log_error(url, "meta tag timeout (partial render)", console_logs)
+            await log_render(url, "partial", "meta tag timeout (partial render)", console_logs)
 
         # Get rendered HTML (even if partial)
         html = await page.content()
@@ -61,15 +83,17 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client) -> s
                 Body=html.encode("utf-8"),
                 ContentType="text/html"
             )
+            # Log success
+            await log_render(url, "success", "rendered and cached")
 
         return html
 
     except PlaywrightTimeoutError:
         # Page load timeout - complete failure
-        await log_error(url, "page load timeout", console_logs)
+        await log_render(url, "failed", "page load timeout", console_logs)
         raise
     except Exception as e:
-        await log_error(url, f"{type(e).__name__}: {e}", console_logs)
+        await log_render(url, "failed", f"{type(e).__name__}: {e}", console_logs)
         raise
     finally:
         if page:

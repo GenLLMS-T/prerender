@@ -51,7 +51,7 @@ SITEMAPLLMS_S3_USE_SSL=true
 
 # Prerender Configuration
 NUM_WORKERS=10
-PAGE_LOAD_TIMEOUT=10000
+PAGE_LOAD_TIMEOUT=5000
 META_LOADER_TIMEOUT=2000
 PRERENDER_PORT=3081
 ```
@@ -110,9 +110,9 @@ GET http://localhost:3081/render?url=https://example.com
 3. **캐시 있음**: HTML 즉시 반환 (~50-100ms)
 4. **캐시 없음**:
    - 세마포어 획득 (최대 10개 동시 처리)
-   - Playwright로 렌더링 (~12초 대기)
-   - S3에 저장
-   - HTML 반환
+   - Playwright로 렌더링 (최대 7초: 페이지 로드 5초 + 메타 태그 대기 2초)
+   - 완전한 렌더링 시 S3에 저장
+   - HTML 반환 (또는 실패 시 원본 URL로 302 리다이렉트)
    - 다음 요청 시 캐시에서 반환
 
 ## 렌더링 완료 조건
@@ -125,25 +125,43 @@ GET http://localhost:3081/render?url=https://example.com
 
 이 태그가 나타나면 렌더링 완료로 간주합니다. 타임아웃은 `META_LOADER_TIMEOUT` 환경변수로 설정 가능합니다.
 
-## 에러 처리
+## 로깅 시스템
 
-렌더링 실패 시 다음 파일에 로그가 기록됩니다:
+모든 렌더링 요청이 상태별로 로깅됩니다:
 
-- `logs/failed_urls.txt`: 실패한 URL 목록
-- `logs/errors.log`: 상세 에러 메시지 및 콘솔 로그 (최근 5줄)
+**렌더링 상태**:
+- **SUCCESS**: 완전한 렌더링 + S3 캐싱 완료
+- **PARTIAL**: 페이지 로드 성공, 메타 태그 타임아웃 (부분 렌더링)
+- **FAILED**: 페이지 로드 실패 또는 예외 발생
+
+**로그 파일**:
+- `logs/render-YYYY-MM-DD.log`: 일자별 전체 렌더링 로그 (성공/부분/실패 모두 포함)
+- `logs/failed_urls.txt`: 실패한 URL 목록 (중복 제거됨, batch 재처리용)
 
 로그 파일은 호스트의 `./logs` 디렉토리에 저장되며, 컨테이너를 재시작해도 유지됩니다.
 
 **로그 확인 방법**:
 ```bash
-# 실패한 URL 목록
+# 오늘자 렌더링 로그
+tail -f logs/render-$(date +%Y-%m-%d).log
+
+# 실패한 URL 목록 (중복 제거됨)
 cat logs/failed_urls.txt
 
-# 상세 에러 로그
-tail -f logs/errors.log
-
-# Docker logs에서도 확인 가능
+# Docker logs에서 실시간 확인
 docker logs -f prerender
+```
+
+**콘솔 출력 예시**:
+```
+[2025-11-10 14:30:15] [SUCCESS] https://example.com
+  → rendered and cached
+
+[2025-11-10 14:30:20] [PARTIAL] https://slow.com
+  → meta tag timeout (partial render)
+
+[2025-11-10 14:30:25] [FAILED] https://broken.com
+  → page load timeout
 ```
 
 ## FastAPI 메인 프로젝트와 통합
@@ -178,8 +196,8 @@ async def get_prerendered_page(url: str):
 ## 설정 튜닝
 
 - `NUM_WORKERS`: 동시 렌더링 워커 수 (기본: 10)
-- `PAGE_LOAD_TIMEOUT`: 페이지 로드 타임아웃 (기본: 10000ms)
-- `META_LOADER_TIMEOUT`: 메타태그 대기 타임아웃 (기본: 2000ms)
+- `PAGE_LOAD_TIMEOUT`: 페이지 로드 타임아웃 (기본: 5000ms, DOM 파싱 완료까지)
+- `META_LOADER_TIMEOUT`: 메타태그 대기 타임아웃 (기본: 2000ms, JavaScript 렌더링 완료 대기)
 
 ## 주의사항
 
