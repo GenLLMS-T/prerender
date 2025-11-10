@@ -3,6 +3,7 @@ import hashlib
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from aiobotocore.session import get_session
+from utils import is_safe_url
 import config
 
 # Global queue for render tasks
@@ -42,6 +43,12 @@ async def worker():
                 url = await render_task_queue.get()
                 console_logs = []
                 page = None
+
+                # Validate URL (defense in depth)
+                if not is_safe_url(url):
+                    await log_error(url, "Invalid URL: SSRF protection triggered")
+                    render_task_queue.task_done()
+                    continue
 
                 try:
                     page = await context.new_page()

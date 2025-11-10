@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 import asyncio
 import hashlib
 import boto3
 from worker import render_task_queue, start_workers
+from utils import is_safe_url
 import config
 
 app = FastAPI()
@@ -30,6 +31,13 @@ async def startup_event():
 
 @app.get("/render")
 async def render_url(url: str):
+    # Validate URL to prevent SSRF attacks
+    if not is_safe_url(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL: Only public HTTP(S) URLs are allowed"
+        )
+
     key = f"{config.S3_PREFIX}/" + hashlib.md5(url.encode()).hexdigest() + ".html"
 
     try:
