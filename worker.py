@@ -17,14 +17,14 @@ async def log_render(url: str, status: str, message: str = "", console_logs=None
     date_str = now.strftime("%Y-%m-%d")
 
     # Console output
-    print(f"[{timestamp}] [{status.upper()}] {url}")
+    print(f"[{timestamp}] [{url}] [{status.upper()}]")
     if message:
         print(f"  → {message}")
 
     # Log to daily file
     log_file = f"logs/render-{date_str}.log"
     with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] [{status.upper()}] {url}\n")
+        f.write(f"[{timestamp}] [{url}] [{status.upper()}]\n")
         if message:
             f.write(f"  → {message}\n")
         if console_logs:
@@ -91,7 +91,7 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client, redi
             try:
                 await redis_client.setex(redis_cache_key, config.REDIS_CACHE_TTL, html)
             except Exception as e:
-                print(f"Redis cache store error: {e}")
+                print(f"[{url}] [REDIS ERROR] → cache store error: {e}")
 
             # Log success
             await log_render(url, "success", "rendered and cached (S3 + Redis, 1h)")
@@ -101,7 +101,7 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client, redi
                 await redis_client.setex(redis_cache_key, 60, html)
                 await log_render(url, "partial", "meta tag timeout - cached to Redis (60s)", console_logs)
             except Exception as e:
-                print(f"Redis partial cache store error: {e}")
+                print(f"[{url}] [REDIS ERROR] → partial cache store error: {e}")
                 await log_render(url, "partial", "meta tag timeout (not cached)", console_logs)
 
         return html

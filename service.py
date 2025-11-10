@@ -25,21 +25,21 @@ async def render_url_service(
         failure_key = f"render:failure:{url_hash}"
         is_failed = await redis_client.get(failure_key)
         if is_failed:
-            print(f"[FAILURE CACHED] {url} - skipping render (failed recently)")
+            print(f"[{url}] [FAILURE CACHED] → skipping render (failed recently)")
             raise HTTPException(500, "Rendering failed recently (cached)")
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Redis failure check error: {e}")
+        print(f"[{url}] [REDIS ERROR] → failure check error: {e}")
 
     # Step 2: Check Redis cache (complete renders only, TTL: 1 hour)
     try:
         cached_html = await redis_client.get(redis_cache_key)
         if cached_html:
-            print(f"[CACHE HIT: Redis] {url}")
+            print(f"[{url}] [CACHE HIT: Redis]")
             return cached_html
     except Exception as e:
-        print(f"Redis cache check error: {e}")
+        print(f"[{url}] [REDIS ERROR] → cache check error: {e}")
 
     # Step 3: Check S3 cache
     try:
@@ -48,19 +48,19 @@ async def render_url_service(
         async with obj["Body"] as stream:
             body = await stream.read()
         html = body.decode("utf-8")
-        print(f"[CACHE HIT: S3] {url}")
+        print(f"[{url}] [CACHE HIT: S3]")
 
         # Store in Redis for faster future access
         try:
             await redis_client.setex(redis_cache_key, config.REDIS_CACHE_TTL, html)
         except Exception as e:
-            print(f"Redis cache store error: {e}")
+            print(f"[{url}] [REDIS ERROR] → cache store error: {e}")
 
         return html
     except cache_s3_client.exceptions.NoSuchKey:
         pass
     except Exception as e:
-        print(f"S3 cache check error: {e}")
+        print(f"[{url}] [S3 ERROR] → {e}")
 
     # Step 4: Render (with duplicate request handling)
     # Check if another request is already rendering this URL
@@ -70,17 +70,17 @@ async def render_url_service(
 
         if not lock_acquired:
             # Another request is rendering - wait for result
-            print(f"[WAITING] Another request is rendering: {url}")
+            print(f"[{url}] [WAITING] → another request is rendering")
             for _ in range(60):  # Wait up to 60 seconds
                 await asyncio.sleep(1)
                 result = await redis_client.get(redis_result_key)
                 if result:
-                    print(f"[CACHE HIT: Duplicate] {url}")
+                    print(f"[{url}] [CACHE HIT: Duplicate]")
                     return result
             # Timeout - proceed with our own render
-            print(f"[TIMEOUT] Waiting for duplicate request timed out: {url}")
+            print(f"[{url}] [TIMEOUT] → waiting for duplicate request timed out")
     except Exception as e:
-        print(f"Redis lock error: {e}")
+        print(f"[{url}] [REDIS ERROR] → lock error: {e}")
 
     # Acquire semaphore to limit concurrent renders
     async with render_semaphore:
@@ -105,7 +105,7 @@ async def render_url_service(
             try:
                 await redis_client.setex(redis_result_key, config.REDIS_RENDER_TTL, html)
             except Exception as e:
-                print(f"Redis result store error: {e}")
+                print(f"[{url}] [REDIS ERROR] → result store error: {e}")
 
             return html
         except Exception as e:

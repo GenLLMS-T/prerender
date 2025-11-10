@@ -119,5 +119,5 @@ async def render_url(url: str):
         return Response(content=html, media_type="text/html")
     except HTTPException:
         # Rendering failed - redirect to original URL
-        print(f"Rendering failed for {url}, redirecting to original")
+        print(f"[{url}] [REDIRECT] → rendering failed, redirecting to original")
         return RedirectResponse(url=url, status_code=302)
