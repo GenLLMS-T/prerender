@@ -47,7 +47,7 @@ async def log_render(url: str, status: str, message: str = "", console_logs=None
                 f.write(url + "\n")
 
 
-async def render_page(url: str, browser_context: BrowserContext, s3_client) -> str:
+async def render_page(url: str, browser_context: BrowserContext, s3_client, redis_client, url_hash: str) -> str:
     console_logs = []
     page = None
     is_complete = False
@@ -74,17 +74,26 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client) -> s
         # Get rendered HTML (even if partial)
         html = await page.content()
 
-        # Only cache complete renders to S3
+        # Only cache complete renders to S3 and Redis
         if is_complete:
-            key = f"{config.S3_PREFIX}/" + hashlib.md5(url.encode()).hexdigest() + ".html"
+            # Save to S3
+            s3_key = f"{config.S3_PREFIX}/{url_hash}.html"
             await s3_client.put_object(
                 Bucket=config.S3_BUCKET,
-                Key=key,
+                Key=s3_key,
                 Body=html.encode("utf-8"),
                 ContentType="text/html"
             )
+
+            # Save to Redis (TTL: 1 hour)
+            try:
+                redis_cache_key = f"render:cache:{url_hash}"
+                await redis_client.setex(redis_cache_key, config.REDIS_CACHE_TTL, html)
+            except Exception as e:
+                print(f"Redis cache store error: {e}")
+
             # Log success
-            await log_render(url, "success", "rendered and cached")
+            await log_render(url, "success", "rendered and cached (S3 + Redis)")
 
         return html
 

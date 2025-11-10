@@ -1,6 +1,14 @@
 name: prerender
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: prerender-redis
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
   api:
     build: .
     image: prerender-fastapi:latest
@@ -9,6 +17,13 @@ services:
       - "3081:3081"
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
     volumes:
       - ./logs:/app/logs
+    depends_on:
+      - redis
     restart: unless-stopped
+
+volumes:
+  redis-data:

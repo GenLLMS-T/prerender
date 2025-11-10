@@ -16,3 +16,9 @@ NUM_WORKERS = int(os.getenv("NUM_WORKERS", "10"))
 PAGE_LOAD_TIMEOUT = int(os.getenv("PAGE_LOAD_TIMEOUT", "5000"))
 META_LOADER_TIMEOUT = int(os.getenv("META_LOADER_TIMEOUT", "2000"))
 PRERENDER_PORT = int(os.getenv("PRERENDER_PORT", "3081"))
+
+# Redis Configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_CACHE_TTL = int(os.getenv("REDIS_CACHE_TTL", "3600"))  # 1 hour for complete renders
+REDIS_RENDER_TTL = int(os.getenv("REDIS_RENDER_TTL", "60"))  # 1 minute for duplicate request handling
+REDIS_FAILURE_TTL = int(os.getenv("REDIS_FAILURE_TTL", "300"))  # 5 minutes for failed renders
