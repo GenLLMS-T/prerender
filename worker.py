@@ -28,6 +28,7 @@ async def log_error(url: str, message: str, console_logs=None):
 async def render_page(url: str, browser_context: BrowserContext, s3_client) -> str:
     console_logs = []
     page = None
+    is_complete = False
 
     try:
         page = await browser_context.new_page()
@@ -37,28 +38,35 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client) -> s
         await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_LOAD_TIMEOUT)
 
         # Wait for meta tag (indicates rendering complete)
-        await page.wait_for_selector(
-            "meta[data-gen-source='meta-loader']",
-            state="attached",
-            timeout=config.META_LOADER_TIMEOUT
-        )
+        try:
+            await page.wait_for_selector(
+                "meta[data-gen-source='meta-loader']",
+                state="attached",
+                timeout=config.META_LOADER_TIMEOUT
+            )
+            is_complete = True
+        except PlaywrightTimeoutError:
+            # Meta tag not found - partial render, but continue
+            await log_error(url, "meta tag timeout (partial render)", console_logs)
 
-        # Get rendered HTML
+        # Get rendered HTML (even if partial)
         html = await page.content()
 
-        # Save to S3 with MD5(url) as key
-        key = f"{config.S3_PREFIX}/" + hashlib.md5(url.encode()).hexdigest() + ".html"
-        await s3_client.put_object(
-            Bucket=config.S3_BUCKET,
-            Key=key,
-            Body=html.encode("utf-8"),
-            ContentType="text/html"
-        )
+        # Only cache complete renders to S3
+        if is_complete:
+            key = f"{config.S3_PREFIX}/" + hashlib.md5(url.encode()).hexdigest() + ".html"
+            await s3_client.put_object(
+                Bucket=config.S3_BUCKET,
+                Key=key,
+                Body=html.encode("utf-8"),
+                ContentType="text/html"
+            )
 
         return html
 
     except PlaywrightTimeoutError:
-        await log_error(url, "timeout", console_logs)
+        # Page load timeout - complete failure
+        await log_error(url, "page load timeout", console_logs)
         raise
     except Exception as e:
         await log_error(url, f"{type(e).__name__}: {e}", console_logs)

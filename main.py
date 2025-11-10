@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 from contextlib import asynccontextmanager
 import asyncio
 from playwright.async_api import async_playwright
@@ -97,13 +97,17 @@ async def render_url(url: str):
     if not is_safe_url(url):
         raise HTTPException(400, "Invalid URL: Only public HTTP(S) URLs are allowed")
 
-    # Delegate to service layer
-    html = await render_url_service(
-        url=url,
-        cache_s3_client=cache_s3_client,
-        browser_pool=browser_pool,
-        s3_pool=s3_pool,
-        render_semaphore=render_semaphore
-    )
-
-    return Response(content=html, media_type="text/html")
+    try:
+        # Delegate to service layer
+        html = await render_url_service(
+            url=url,
+            cache_s3_client=cache_s3_client,
+            browser_pool=browser_pool,
+            s3_pool=s3_pool,
+            render_semaphore=render_semaphore
+        )
+        return Response(content=html, media_type="text/html")
+    except HTTPException:
+        # Rendering failed - redirect to original URL
+        print(f"Rendering failed for {url}, redirecting to original")
+        return RedirectResponse(url=url, status_code=302)
