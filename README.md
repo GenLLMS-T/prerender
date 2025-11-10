@@ -103,15 +103,16 @@ GET http://localhost:3081/render?url=https://example.com
    }
    ```
 
-### 동작 흐리
+### 동작 흐름
 
 1. 클라이언트가 `/render?url=...` 요청
 2. S3에서 캐시 확인 (MD5 해시 기반)
-3. **캐시 있음**: HTML 즉시 반환
+3. **캐시 있음**: HTML 즉시 반환 (~50-100ms)
 4. **캐시 없음**:
-   - `{"status": "queued"}` 반환
-   - URL을 워커 큐에 추가
-   - 워커가 Playwright로 렌더링 후 S3에 저장
+   - 세마포어 획득 (최대 10개 동시 처리)
+   - Playwright로 렌더링 (~12초 대기)
+   - S3에 저장
+   - HTML 반환
    - 다음 요청 시 캐시에서 반환
 
 ## 렌더링 완료 조건
@@ -128,8 +129,22 @@ GET http://localhost:3081/render?url=https://example.com
 
 렌더링 실패 시 다음 파일에 로그가 기록됩니다:
 
-- `failed_urls.txt`: 실패한 URL 목록
-- `errors.log`: 상세 에러 메시지 및 콘솔 로그
+- `logs/failed_urls.txt`: 실패한 URL 목록
+- `logs/errors.log`: 상세 에러 메시지 및 콘솔 로그 (최근 5줄)
+
+로그 파일은 호스트의 `./logs` 디렉토리에 저장되며, 컨테이너를 재시작해도 유지됩니다.
+
+**로그 확인 방법**:
+```bash
+# 실패한 URL 목록
+cat logs/failed_urls.txt
+
+# 상세 에러 로그
+tail -f logs/errors.log
+
+# Docker logs에서도 확인 가능
+docker logs -f prerender
+```
 
 ## FastAPI 메인 프로젝트와 통합
 

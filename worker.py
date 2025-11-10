@@ -1,19 +1,23 @@
 import asyncio
 import hashlib
+import os
 from datetime import datetime
 from playwright.async_api import BrowserContext, TimeoutError as PlaywrightTimeoutError
 from aiobotocore.session import get_session
 from utils import is_safe_url
 import config
 
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
 
 async def log_error(url: str, message: str, console_logs=None):
     t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Log failed URL
-    with open("failed_urls.txt", "a", encoding="utf-8") as f:
+    with open("logs/failed_urls.txt", "a", encoding="utf-8") as f:
         f.write(url + "\n")
     # Log detailed error with console output
-    with open("errors.log", "a", encoding="utf-8") as f:
+    with open("logs/errors.log", "a", encoding="utf-8") as f:
         f.write(f"[{t}] {url} - {message}\n")
         if console_logs:
             for line in console_logs[-5:]:
