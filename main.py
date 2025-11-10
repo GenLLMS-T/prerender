@@ -1,53 +1,109 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
+from contextlib import asynccontextmanager
 import asyncio
-import hashlib
-import boto3
-from worker import render_task_queue, start_workers
+from playwright.async_api import async_playwright
+from aiobotocore.session import get_session
+from service import render_url_service
 from utils import is_safe_url
 import config
 
-app = FastAPI()
+cache_s3_client = None
+browser_pool = None
+s3_pool = None
+render_semaphore = None
+playwright_instance = None
 
-# Global S3 client - initialized once at startup
-s3_client = None
 
-@app.on_event("startup")
-async def startup_event():
-    global s3_client
+async def startup_resources():
+    global cache_s3_client, browser_pool, s3_pool, render_semaphore, playwright_instance
 
-    # Initialize S3 client once
-    s3_client = boto3.client(
+    session = get_session()
+
+    # Initialize async S3 client for cache operations
+    cache_s3_client = await session.create_client(
         "s3",
         region_name=config.S3_REGION,
         aws_access_key_id=config.S3_ACCESS_KEY,
         aws_secret_access_key=config.S3_SECRET_KEY,
         endpoint_url=None,
         use_ssl=config.S3_USE_SSL
-    )
+    ).__aenter__()
 
-    # Start worker pool
-    asyncio.create_task(start_workers(config.NUM_WORKERS))
+    # Initialize semaphore and pools
+    render_semaphore = asyncio.Semaphore(config.NUM_WORKERS)
+    browser_pool = asyncio.Queue(maxsize=config.NUM_WORKERS)
+    s3_pool = asyncio.Queue(maxsize=config.NUM_WORKERS)
+
+    # Create Playwright instance and browser
+    playwright_instance = await async_playwright().start()
+    browser = await playwright_instance.chromium.launch(headless=True)
+
+    # Create browser contexts and S3 clients for rendering
+    for _ in range(config.NUM_WORKERS):
+        context = await browser.new_context()
+        await browser_pool.put(context)
+
+        s3_async = await session.create_client(
+            "s3",
+            region_name=config.S3_REGION,
+            aws_access_key_id=config.S3_ACCESS_KEY,
+            aws_secret_access_key=config.S3_SECRET_KEY,
+            endpoint_url=None,
+            use_ssl=config.S3_USE_SSL
+        ).__aenter__()
+        await s3_pool.put(s3_async)
+
+    print(f"✓ Initialized {config.NUM_WORKERS} browser contexts and S3 clients")
+    return browser
+
+
+async def cleanup_resources(browser):
+    print("Shutting down...")
+
+    # Close all browser contexts
+    while not browser_pool.empty():
+        context = await browser_pool.get()
+        await context.close()
+
+    # Close S3 clients
+    while not s3_pool.empty():
+        s3 = await s3_pool.get()
+        await s3.__aexit__(None, None, None)
+
+    # Close cache S3 client
+    await cache_s3_client.__aexit__(None, None, None)
+
+    # Close browser and Playwright
+    await browser.close()
+    await playwright_instance.stop()
+
+    print("✓ Cleanup complete")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    browser = await startup_resources()
+    yield
+    await cleanup_resources(browser)
+
+
+app = FastAPI(lifespan=lifespan)
+
 
 @app.get("/render")
 async def render_url(url: str):
     # Validate URL to prevent SSRF attacks
     if not is_safe_url(url):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid URL: Only public HTTP(S) URLs are allowed"
-        )
+        raise HTTPException(400, "Invalid URL: Only public HTTP(S) URLs are allowed")
 
-    key = f"{config.S3_PREFIX}/" + hashlib.md5(url.encode()).hexdigest() + ".html"
+    # Delegate to service layer
+    html = await render_url_service(
+        url=url,
+        cache_s3_client=cache_s3_client,
+        browser_pool=browser_pool,
+        s3_pool=s3_pool,
+        render_semaphore=render_semaphore
+    )
 
-    try:
-        # Use global S3 client (reuse connection)
-        s3_client.head_object(Bucket=config.S3_BUCKET, Key=key)
-        obj = s3_client.get_object(Bucket=config.S3_BUCKET, Key=key)
-        html_content = obj["Body"].read().decode("utf-8")
-        return Response(content=html_content, media_type="text/html")
-
-    except s3_client.exceptions.ClientError:
-        # Cache miss - add to queue
-        await render_task_queue.put(url)
-        return {"status": "queued", "url": url}
+    return Response(content=html, media_type="text/html")
