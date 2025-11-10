@@ -7,3 +7,6 @@ python-dotenv==1.0.1
 playwright
 boto3
 aiobotocore
+
+# Redis cache
+redis[hiredis]>=5.0.0

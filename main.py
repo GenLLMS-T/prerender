@@ -6,9 +6,11 @@ from playwright.async_api import async_playwright
 from aiobotocore.session import get_session
 from service import render_url_service
 from utils import is_safe_url
+from redis_client import create_redis_client, close_redis_client
 import config
 
 cache_s3_client = None
+redis_client = None
 browser_pool = None
 s3_pool = None
 render_semaphore = None
@@ -16,9 +18,13 @@ playwright_instance = None
 
 
 async def startup_resources():
-    global cache_s3_client, browser_pool, s3_pool, render_semaphore, playwright_instance
+    global cache_s3_client, redis_client, browser_pool, s3_pool, render_semaphore, playwright_instance
 
     session = get_session()
+
+    # Initialize Redis client
+    redis_client = await create_redis_client()
+    print("✓ Redis client connected")
 
     # Initialize async S3 client for cache operations
     cache_s3_client = await session.create_client(
@@ -61,6 +67,9 @@ async def startup_resources():
 async def cleanup_resources(browser):
     print("Shutting down...")
 
+    # Close Redis client
+    await close_redis_client(redis_client)
+
     # Close all browser contexts
     while not browser_pool.empty():
         context = await browser_pool.get()
@@ -101,6 +110,7 @@ async def render_url(url: str):
         # Delegate to service layer
         html = await render_url_service(
             url=url,
+            redis_client=redis_client,
             cache_s3_client=cache_s3_client,
             browser_pool=browser_pool,
             s3_pool=s3_pool,

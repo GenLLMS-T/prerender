@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 
 
 def is_safe_url(url: str) -> bool:
-    """Validates URL to prevent SSRF attacks"""
+    # Validates URL to prevent SSRF attacks
     try:
         parsed = urlparse(url)
 

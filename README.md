@@ -6,9 +6,10 @@ Playwright 기반의 경량화된 프리렌더링 서비스입니다. JavaScript
 
 - **Playwright 기반**: Chromium을 사용한 안정적인 렌더링
 - **비동기 워커 풀**: 10개의 워커가 동시에 렌더링 처리
-- **S3 캐싱**: AWS S3에 렌더링 결과를 영구 저장
-- **큐 시스템**: 캐시 미스 시 자동으로 렌더링 큐에 추가
-- **에러 로깅**: 실패한 URL과 콘솔 로그를 파일에 기록
+- **3단계 캐시 시스템**: Redis (인메모리, ~1ms) → S3 (영구 저장, ~50ms) → 렌더링
+- **중복 요청 처리**: 동일 URL 동시 요청 시 첫 번째 결과 공유
+- **SSRF 방어**: 사설 IP 및 로컬호스트 차단
+- **일자별 로깅**: 성공/부분/실패 상태별 로깅 및 중복 제거
 
 ## 기존 prerender.io와의 차이점
 
@@ -54,6 +55,12 @@ NUM_WORKERS=10
 PAGE_LOAD_TIMEOUT=5000
 META_LOADER_TIMEOUT=2000
 PRERENDER_PORT=3081
+
+# Redis Configuration (docker-compose에서 자동 설정)
+REDIS_URL=redis://redis:6379
+REDIS_CACHE_TTL=3600      # 완전 렌더링 캐시 TTL (1시간)
+REDIS_RENDER_TTL=60       # 중복 요청용 TTL (60초)
+REDIS_FAILURE_TTL=300     # 실패 캐싱 TTL (5분)
 ```
 
 ## 로컬 실행
@@ -85,35 +92,37 @@ docker-compose up --build
 GET http://localhost:3081/render?url=https://example.com
 ```
 
-**응답 케이스:**
+**응답:**
+```
+Status: 200
+Content-Type: text/html
 
-1. **캐시 히트** (S3에 있는 경우)
-   ```
-   Status: 200
-   Content-Type: text/html
+<html>...</html>
+```
 
-   <html>...</html>
-   ```
+또는 렌더링 실패 시 원본 URL로 302 리다이렉트
 
-2. **캐시 미스** (렌더링 큐에 추가)
-   ```json
-   {
-     "status": "queued",
-     "url": "https://example.com"
-   }
-   ```
-
-### 동작 흐름
+### 동작 흐름 (3단계 캐시)
 
 1. 클라이언트가 `/render?url=...` 요청
-2. S3에서 캐시 확인 (MD5 해시 기반)
-3. **캐시 있음**: HTML 즉시 반환 (~50-100ms)
-4. **캐시 없음**:
+2. **Redis 캐시 확인** (완전 렌더링만, TTL: 1시간)
+   - ✅ 히트: HTML 즉시 반환 (~1ms)
+   - ❌ 미스: 다음 단계
+3. **S3 캐시 확인** (MD5 해시 기반)
+   - ✅ 히트: HTML 반환 + Redis에 캐시 (~50ms)
+   - ❌ 미스: 렌더링 시작
+4. **렌더링** (최대 7초: 페이지 로드 5초 + 메타 태그 대기 2초)
+   - **중복 요청 처리**: Lock 확인
+     - 다른 요청이 렌더링 중이면 대기 (최대 60초)
+     - 결과 공유하여 중복 렌더링 방지
    - 세마포어 획득 (최대 10개 동시 처리)
-   - Playwright로 렌더링 (최대 7초: 페이지 로드 5초 + 메타 태그 대기 2초)
-   - 완전한 렌더링 시 S3에 저장
-   - HTML 반환 (또는 실패 시 원본 URL로 302 리다이렉트)
-   - 다음 요청 시 캐시에서 반환
+   - Playwright로 페이지 렌더링
+   - 완전한 렌더링 시:
+     - S3에 영구 저장
+     - Redis에 캐시 (TTL: 1시간)
+   - 실패 시:
+     - Redis에 실패 기록 (TTL: 5분, 재시도 방지)
+     - 원본 URL로 302 리다이렉트
 
 ## 렌더링 완료 조건
 
@@ -195,9 +204,21 @@ async def get_prerendered_page(url: str):
 
 ## 설정 튜닝
 
+**렌더링 설정:**
 - `NUM_WORKERS`: 동시 렌더링 워커 수 (기본: 10)
 - `PAGE_LOAD_TIMEOUT`: 페이지 로드 타임아웃 (기본: 5000ms, DOM 파싱 완료까지)
 - `META_LOADER_TIMEOUT`: 메타태그 대기 타임아웃 (기본: 2000ms, JavaScript 렌더링 완료 대기)
+
+**Redis 캐시 TTL:**
+- `REDIS_CACHE_TTL`: 완전 렌더링 캐시 (기본: 3600초 = 1시간)
+  - Redis에 HTML을 캐싱하는 시간
+  - 자주 방문하는 페이지는 ~1ms 응답 속도
+- `REDIS_RENDER_TTL`: 중복 요청용 임시 캐시 (기본: 60초)
+  - 동일 URL 동시 요청 시 결과 공유
+  - 렌더링 완료 후 1분간 유지
+- `REDIS_FAILURE_TTL`: 실패 캐싱 (기본: 300초 = 5분)
+  - 렌더링 실패한 URL을 5분간 기록
+  - 재시도 폭주(retry storm) 방지
 
 ## 주의사항
 
