@@ -69,14 +69,16 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client, redi
             is_complete = True
         except PlaywrightTimeoutError:
             # Meta tag not found - partial render, but continue
-            await log_render(url, "partial", "meta tag timeout (partial render)", console_logs)
+            pass
 
         # Get rendered HTML (even if partial)
         html = await page.content()
 
-        # Only cache complete renders to S3 and Redis
+        # Cache renders to S3 and/or Redis
+        redis_cache_key = f"render:cache:{url_hash}"
+
         if is_complete:
-            # Save to S3
+            # Complete render: Save to S3 + Redis (long TTL)
             s3_key = f"{config.S3_PREFIX}/{url_hash}.html"
             await s3_client.put_object(
                 Bucket=config.S3_BUCKET,
@@ -87,13 +89,20 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client, redi
 
             # Save to Redis (TTL: 1 hour)
             try:
-                redis_cache_key = f"render:cache:{url_hash}"
                 await redis_client.setex(redis_cache_key, config.REDIS_CACHE_TTL, html)
             except Exception as e:
                 print(f"Redis cache store error: {e}")
 
             # Log success
-            await log_render(url, "success", "rendered and cached (S3 + Redis)")
+            await log_render(url, "success", "rendered and cached (S3 + Redis, 1h)")
+        else:
+            # Partial render: Save to Redis only (short TTL: 60 seconds)
+            try:
+                await redis_client.setex(redis_cache_key, 60, html)
+                await log_render(url, "partial", "meta tag timeout - cached to Redis (60s)", console_logs)
+            except Exception as e:
+                print(f"Redis partial cache store error: {e}")
+                await log_render(url, "partial", "meta tag timeout (not cached)", console_logs)
 
         return html
 
