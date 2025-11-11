@@ -10,3 +10,6 @@ aiobotocore
 
 # Redis cache
 redis[hiredis]>=5.0.0
+
+# HTTP client for batch jobs
+httpx>=0.27.0

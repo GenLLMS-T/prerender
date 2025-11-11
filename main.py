@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body, UploadFile, File
 from fastapi.responses import Response, RedirectResponse
 from contextlib import asynccontextmanager
 import asyncio
@@ -7,6 +7,7 @@ from aiobotocore.session import get_session
 from service import render_url_service
 from utils import is_safe_url
 from redis_client import create_redis_client, close_redis_client
+from batch import parse_sitemap, parse_url_list, process_batch_job, generate_job_id
 import config
 
 cache_s3_client = None
@@ -121,3 +122,111 @@ async def render_url(url: str):
         # Rendering failed - redirect to original URL
         print(f"[{url}] [REDIRECT] → rendering failed, redirecting to original")
         return RedirectResponse(url=url, status_code=302)
+
+
+@app.post("/batch/sitemap")
+async def batch_sitemap(sitemap_url: str = Body(..., embed=True)):
+    # Start batch rendering from sitemap.xml
+    # Validate sitemap URL
+    if not is_safe_url(sitemap_url):
+        raise HTTPException(400, "Invalid sitemap URL")
+
+    # Parse sitemap
+    urls = await parse_sitemap(sitemap_url)
+    if not urls:
+        raise HTTPException(400, "No URLs found in sitemap or failed to parse")
+
+    # Generate job ID
+    job_id = generate_job_id()
+
+    # Create wrapper function for render_url_service
+    async def render_wrapper(url: str):
+        return await render_url_service(
+            url=url,
+            redis_client=redis_client,
+            cache_s3_client=cache_s3_client,
+            browser_pool=browser_pool,
+            s3_pool=s3_pool,
+            render_semaphore=render_semaphore
+        )
+
+    # Start background task
+    asyncio.create_task(
+        process_batch_job(job_id, urls, cache_s3_client, render_wrapper)
+    )
+
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "total_urls": len(urls),
+        "message": f"Batch job started. Check progress at GET /batch/status/{job_id}"
+    }
+
+
+@app.post("/batch/file")
+async def batch_file(file: UploadFile = File(...)):
+    # Start batch rendering from uploaded file (newline-separated URLs)
+    # Read file content
+    content = await file.read()
+    urls_text = content.decode("utf-8")
+
+    # Parse URL list
+    url_list = await parse_url_list(urls_text)
+    if not url_list:
+        raise HTTPException(400, "No valid URLs found in file")
+
+    # Generate job ID
+    job_id = generate_job_id()
+
+    # Create wrapper function for render_url_service
+    async def render_wrapper(url: str):
+        return await render_url_service(
+            url=url,
+            redis_client=redis_client,
+            cache_s3_client=cache_s3_client,
+            browser_pool=browser_pool,
+            s3_pool=s3_pool,
+            render_semaphore=render_semaphore
+        )
+
+    # Start background task
+    asyncio.create_task(
+        process_batch_job(job_id, url_list, cache_s3_client, render_wrapper)
+    )
+
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "total_urls": len(url_list),
+        "message": f"Batch job started. Check progress at GET /batch/status/{job_id}"
+    }
+
+
+@app.get("/batch/status/{job_id}")
+async def batch_status(job_id: str):
+    # Get batch job status
+    # Get job status from S3
+    import json
+    s3_key = f"{config.S3_PREFIX}/batch/{job_id}.json"
+
+    try:
+        obj = await cache_s3_client.get_object(Bucket=config.S3_BUCKET, Key=s3_key)
+        async with obj["Body"] as stream:
+            body = await stream.read()
+        job_data = json.loads(body.decode("utf-8"))
+
+        return {
+            "job_id": job_id,
+            "status": job_data.get("status", "unknown"),
+            "total": job_data.get("total", 0),
+            "completed": job_data.get("completed", 0),
+            "failed": job_data.get("failed", 0),
+            "progress": f"{job_data.get('completed', 0)}/{job_data.get('total', 0)}",
+            "started_at": job_data.get("started_at"),
+            "completed_at": job_data.get("completed_at")
+        }
+    except cache_s3_client.exceptions.NoSuchKey:
+        raise HTTPException(404, "Job not found")
+    except Exception as e:
+        print(f"[{job_id}] [S3 ERROR] → failed to get job status: {e}")
+        raise HTTPException(500, f"Failed to get job status: {e}")
