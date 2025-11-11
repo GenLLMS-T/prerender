@@ -102,6 +102,70 @@ Content-Type: text/html
 
 또는 렌더링 실패 시 원본 URL로 302 리다이렉트
 
+### 배치 렌더링
+
+**1. Sitemap에서 배치 렌더링:**
+```bash
+curl -X POST http://localhost:3081/batch/sitemap \
+  -H "Content-Type: application/json" \
+  -d '{"sitemap_url": "https://example.com/sitemap.xml"}'
+```
+
+**응답:**
+```json
+{
+  "status": "started",
+  "job_id": "a1b2c3d4",
+  "total_urls": 1523,
+  "message": "Batch job started. Check progress at GET /batch/status/a1b2c3d4"
+}
+```
+
+**2. 파일 업로드로 배치 렌더링:**
+```bash
+# failed_urls.txt 파일 업로드
+curl -X POST http://localhost:3081/batch/file \
+  -F "file=@logs/failed_urls.txt"
+
+# 또는 다른 URL 목록 파일
+curl -X POST http://localhost:3081/batch/file \
+  -F "file=@urls.txt"
+```
+
+파일 형식 (newline-separated):
+```
+https://example.com/page1
+https://example.com/page2
+https://example.com/page3
+```
+
+**3. 진행 상황 확인:**
+```bash
+curl http://localhost:3081/batch/status/a1b2c3d4
+```
+
+**응답:**
+```json
+{
+  "job_id": "a1b2c3d4",
+  "status": "running",
+  "total": 1523,
+  "completed": 450,
+  "failed": 12,
+  "progress": "450/1523",
+  "started_at": "2025-11-10T12:30:00",
+  "completed_at": null
+}
+```
+
+**상태 값:**
+- `running`: 진행 중
+- `completed`: 완료
+
+**저장 위치:**
+- 배치 작업 상태: S3 (`{S3_PREFIX}/batch/{job_id}.json`)
+- 영구 저장되며, 수동 삭제 필요
+
 ### 동작 흐름 (3단계 캐시)
 
 1. 클라이언트가 `/render?url=...` 요청
