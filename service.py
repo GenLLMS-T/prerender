@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 from fastapi import HTTPException
-from worker import render_page
+from worker import render_page, render_page_live
 import config
 
 
@@ -125,3 +125,26 @@ async def render_url_service(
             # Always return resources to pool
             await browser_pool.put(browser_context)
             await s3_pool.put(s3_async)
+
+
+async def render_url_live_service(
+    url: str,
+    browser_pool: asyncio.Queue,
+    render_semaphore: asyncio.Semaphore
+) -> str:
+    # Render URL without any caching (always fresh).
+    # Only uses semaphore for concurrency control
+    # Acquire semaphore to limit concurrent renders
+    async with render_semaphore:
+        # Get browser context from pool
+        browser_context = await browser_pool.get()
+
+        try:
+            # Render the page (no caching)
+            html = await render_page_live(url, browser_context)
+            return html
+        except Exception as e:
+            raise HTTPException(500, f"Rendering failed: {type(e).__name__}: {str(e)}")
+        finally:
+            # Always return browser context to pool
+            await browser_pool.put(browser_context)

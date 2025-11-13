@@ -116,3 +116,51 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client, redi
     finally:
         if page:
             await page.close()
+
+
+async def render_page_live(url: str, browser_context: BrowserContext) -> str:
+    # Render page without any caching (for /live endpoint).
+    console_logs = []
+    page = None
+    is_complete = False
+
+    try:
+        page = await browser_context.new_page()
+        page.on("console", lambda msg: console_logs.append(f"[console:{msg.type}] {msg.text}"))
+
+        # Load page
+        await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_LOAD_TIMEOUT)
+
+        # Wait for meta tag (indicates rendering complete)
+        try:
+            await page.wait_for_selector(
+                "meta[data-gen-source='meta-loader']",
+                state="attached",
+                timeout=config.META_LOADER_TIMEOUT
+            )
+            is_complete = True
+        except PlaywrightTimeoutError:
+            # Meta tag not found - partial render, but continue
+            pass
+
+        # Get rendered HTML (even if partial)
+        html = await page.content()
+
+        # Log (no caching)
+        if is_complete:
+            await log_render(url, "live-complete", "rendered without caching")
+        else:
+            await log_render(url, "live-partial", "meta tag timeout (no cache)", console_logs)
+
+        return html
+
+    except PlaywrightTimeoutError:
+        # Page load timeout - complete failure
+        await log_render(url, "failed", "page load timeout (live)", console_logs)
+        raise
+    except Exception as e:
+        await log_render(url, "failed", f"{type(e).__name__}: {e} (live)", console_logs)
+        raise
+    finally:
+        if page:
+            await page.close()
