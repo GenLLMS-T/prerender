@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from playwright.async_api import async_playwright
 from aiobotocore.session import get_session
-from service import render_url_service
+from service import render_url_service, render_url_live_service
 from utils import is_safe_url
 from redis_client import create_redis_client, close_redis_client
 from batch import parse_sitemap, parse_url_list, process_batch_job, generate_job_id
@@ -121,6 +121,27 @@ async def render_url(url: str):
     except HTTPException:
         # Rendering failed - redirect to original URL
         print(f"[{url}] [REDIRECT] → rendering failed, redirecting to original")
+        return RedirectResponse(url=url, status_code=302)
+
+
+@app.get("/live")
+async def render_url_live(url: str):
+    # Render without any caching (always fresh)
+    # Validate URL to prevent SSRF attacks
+    if not is_safe_url(url):
+        raise HTTPException(400, "Invalid URL: Only public HTTP(S) URLs are allowed")
+
+    try:
+        # Delegate to live service (no caching)
+        html = await render_url_live_service(
+            url=url,
+            browser_pool=browser_pool,
+            render_semaphore=render_semaphore
+        )
+        return Response(content=html, media_type="text/html")
+    except HTTPException:
+        # Rendering failed - redirect to original URL
+        print(f"[{url}] [REDIRECT] → live rendering failed, redirecting to original")
         return RedirectResponse(url=url, status_code=302)
 
 
