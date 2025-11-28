@@ -62,7 +62,7 @@ async def render_page(url: str, browser_context: BrowserContext, s3_client, redi
         # Wait for meta tag (indicates rendering complete)
         try:
             await page.wait_for_selector(
-                "meta[data-gen-source='meta-loader']",
+                "meta[name='data-gen-ready']",
                 state="attached",
                 timeout=config.META_LOADER_TIMEOUT
             )
@@ -134,7 +134,7 @@ async def render_page_live(url: str, browser_context: BrowserContext) -> str:
         # Wait for meta tag (indicates rendering complete)
         try:
             await page.wait_for_selector(
-                "meta[data-gen-source='meta-loader']",
+                "meta[name='data-gen-ready']",
                 state="attached",
                 timeout=config.META_LOADER_TIMEOUT
             )
